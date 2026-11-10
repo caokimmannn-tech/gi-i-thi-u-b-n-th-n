@@ -7,57 +7,116 @@ const navLinks = [...document.querySelectorAll(".primary-nav a")];
 const emailLink = document.querySelector("#email-link");
 const emailAddress = document.querySelector("#email-address");
 const currentYear = document.querySelector("#current-year");
-const backgroundMusic = document.querySelector("#background-music");
 const musicToggle = document.querySelector("#music-toggle");
 const musicLabel = document.querySelector("#music-label");
 const musicStatus = document.querySelector("#music-status");
-let statusTimeout;
+const melody = [523.25, 659.25, 783.99, 659.25, 587.33, 659.25, 880, 783.99,
+  659.25, 523.25, 587.33, 659.25, 783.99, 880, 783.99, 659.25];
+const activeOscillators = new Set();
+let audioContext = null;
+let musicTimer = null;
+let melodyIndex = 0;
+let isMusicPlaying = false;
 
 emailLink.href = `mailto:${CONTACT_EMAIL}`;
 emailAddress.textContent = CONTACT_EMAIL;
 currentYear.textContent = new Date().getFullYear();
-backgroundMusic.volume = 0.2;
 
 function updateMusicButton(isPlaying) {
   musicLabel.textContent = isPlaying ? "Tắt nhạc" : "Bật nhạc";
   musicToggle.setAttribute("aria-pressed", String(isPlaying));
 }
 
-function showMusicMessage(message) {
-  musicStatus.textContent = message;
-  window.clearTimeout(statusTimeout);
-  statusTimeout = window.setTimeout(() => {
-    musicStatus.textContent = "";
-  }, 5000);
+function playTone(frequency, startTime, duration, volume, waveform = "sine") {
+  const oscillator = audioContext.createOscillator();
+  const envelope = audioContext.createGain();
+  oscillator.type = waveform;
+  oscillator.frequency.setValueAtTime(frequency, startTime);
+  envelope.gain.setValueAtTime(0.0001, startTime);
+  envelope.gain.linearRampToValueAtTime(volume, startTime + 0.025);
+  envelope.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+  oscillator.connect(envelope);
+  envelope.connect(audioContext.destination);
+  activeOscillators.add(oscillator);
+  oscillator.addEventListener("ended", () => {
+    activeOscillators.delete(oscillator);
+    oscillator.disconnect();
+    envelope.disconnect();
+  }, { once: true });
+  oscillator.start(startTime);
+  oscillator.stop(startTime + duration + 0.02);
 }
 
-musicToggle.addEventListener("click", async () => {
-  if (!backgroundMusic.paused) {
-    backgroundMusic.pause();
+function playNextNote() {
+  if (!isMusicPlaying || !audioContext) return;
+
+  const frequency = melody[melodyIndex];
+  if (frequency) {
+    const now = audioContext.currentTime;
+    playTone(frequency, now, 0.85, 0.12);
+    playTone(frequency * 2, now, 0.42, 0.018, "triangle");
+    if (melodyIndex % 4 === 0) {
+      playTone(frequency / 2, now, 1.05, 0.035);
+    }
+  }
+
+  melodyIndex = (melodyIndex + 1) % melody.length;
+  musicTimer = window.setTimeout(playNextNote, 620);
+}
+
+async function startMusic() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    musicStatus.textContent = "Trình duyệt này chưa hỗ trợ phát nhạc.";
     return;
   }
 
+  if (!audioContext || audioContext.state === "closed") {
+    audioContext = new AudioContextClass();
+  }
+  await audioContext.resume();
+  melodyIndex = 0;
+  isMusicPlaying = true;
+  musicStatus.textContent = "";
+  updateMusicButton(true);
+  playNextNote();
+}
+
+async function stopMusic() {
+  isMusicPlaying = false;
+  window.clearTimeout(musicTimer);
+  musicTimer = null;
+  activeOscillators.forEach((oscillator) => {
+    try {
+      oscillator.stop();
+    } catch (error) {
+      if (error.name !== "InvalidStateError") throw error;
+    }
+  });
+  activeOscillators.clear();
+
+  const contextToClose = audioContext;
+  audioContext = null;
+  updateMusicButton(false);
+  if (contextToClose && contextToClose.state !== "closed") {
+    await contextToClose.close();
+  }
+}
+
+musicToggle.addEventListener("click", async () => {
   musicToggle.disabled = true;
   try {
-    await backgroundMusic.play();
+    if (isMusicPlaying) {
+      await stopMusic();
+    } else {
+      await startMusic();
+    }
   } catch {
-    updateMusicButton(false);
-    showMusicMessage("Không phát được nhạc. Hãy kiểm tra tệp assets/background-music.mp3.");
+    await stopMusic();
+    musicStatus.textContent = "Không thể khởi động âm thanh trên trình duyệt này.";
   } finally {
     musicToggle.disabled = false;
   }
-});
-
-backgroundMusic.addEventListener("play", () => {
-  updateMusicButton(true);
-  musicStatus.textContent = "";
-  window.clearTimeout(statusTimeout);
-});
-backgroundMusic.addEventListener("pause", () => updateMusicButton(false));
-backgroundMusic.addEventListener("ended", () => updateMusicButton(false));
-backgroundMusic.addEventListener("error", () => {
-  updateMusicButton(false);
-  showMusicMessage("Không tìm thấy hoặc không phát được tệp nhạc nền.");
 });
 
 function closeMenu() {
